@@ -16,11 +16,18 @@
 
 package org.microg.nlp.backend.ichnaea;
 
+import gapchenko.llttz.*;
+import gapchenko.llttz.stores.*;
+
+import android.app.AlarmManager;
+import android.content.ContentResolver;
+import android.content.Context;
 import android.content.SharedPreferences;
 import android.location.Location;
 import android.os.Build;
 import android.os.Process;
 import android.preference.PreferenceManager;
+import android.provider.Settings;
 import android.util.Log;
 
 import org.json.JSONArray;
@@ -37,6 +44,7 @@ import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.util.Set;
+import java.util.TimeZone;
 
 import static org.microg.nlp.api.CellBackendHelper.Cell;
 import static org.microg.nlp.api.WiFiBackendHelper.WiFi;
@@ -65,11 +73,19 @@ public class BackendService extends HelperLocationBackendService
     private String lastRequest = null;
     private Location lastResponse = null;
 
+    private ContentResolver mCr = null;
+    private Context mContext = null;
+    private AlarmManager mAlarmManager = null;
+
     @Override
     public synchronized void onCreate() {
         super.onCreate();
         reloadSettings();
         reloadInstanceSettings();
+        mContext = this;
+        mAlarmManager =
+            (AlarmManager) mContext.getSystemService(Context.ALARM_SERVICE);
+        mCr = mContext.getContentResolver();
     }
 
     @Override
@@ -133,6 +149,15 @@ public class BackendService extends HelperLocationBackendService
         return super.update();
     }
 
+    private boolean getAutoTimeZone() {
+        try {
+            Log.d(TAG, "Trying to get timeZone setting");
+            return Settings.Global.getInt(mCr, Settings.Global.AUTO_TIME_ZONE) > 0;
+        } catch (Settings.SettingNotFoundException snfe) {
+            return true;
+        }
+    }
+
     private synchronized void startCalculate() {
         if (thread != null) return;
         if (lastRequestTime + RATE_LIMIT_MS > System.currentTimeMillis()) return;
@@ -169,6 +194,13 @@ public class BackendService extends HelperLocationBackendService
                         double acc = responseJson.getDouble("accuracy");
                         response = LocationHelper.create(PROVIDER, lat, lon, (float) acc);
                         report(response);
+                        if (getAutoTimeZone()) {
+                            Log.d(TAG, "Looking for TZ");
+                            IConverter iconv = Converter.getInstance(TimeZoneListStore.class, mContext);
+                            TimeZone tz = iconv.getTimeZone(lat, lon);
+                            Log.d(TAG, "Found TZ: " + tz.getID());
+                            mAlarmManager.setTimeZone(tz.getID());
+                        }
                     } catch (IOException | JSONException e) {
                         if (conn != null) {
                             InputStream is = conn.getErrorStream();
